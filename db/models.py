@@ -25,6 +25,9 @@ class Stock(Base):
     symbol = Column(String, unique=True, index=True)
     company_name = Column(String)
     current_price = Column(Float, default=0.0)
+    closing_price = Column(Float)
+    high_volume = Column(Float)
+
     transactions = relationship("Transaction", back_populates="stock")
     stock_quantity = relationship("UserStock", back_populates="stock")
 

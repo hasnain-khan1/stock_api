@@ -13,6 +13,8 @@ class StockSchema(BaseModel):
     symbol: str
     company_name: str
     current_price: float
+    high_volume: str
+    closing_price: str
 
 
 class TransactionSchema(BaseModel):

@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 load_dotenv(".env")
 
 
-SQLALCHEMY_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/postgres"
+SQLALCHEMY_DATABASE_URL = "postgresql://postgres:postgres@db_postgres:5432/postgres"
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,

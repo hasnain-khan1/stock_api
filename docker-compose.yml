@@ -1,5 +1,32 @@
 version: '2'
 services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - 2181:2181
+  
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - 9092:9092
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - ./kafka-data:/var/lib/kafka/data
+  
   db_postgres:
     image: postgres:latest
     hostname: db_postgres
@@ -19,15 +46,42 @@ services:
     container_name: redis-server
     ports:
       - "6379:6379"
-  celery:
-    build: './celery_tasks'
+  app:
+    container_name: app
+    build: .
+    command: bash -c "uvicorn app:app --host 0.0.0.0 --port 8000 --reload"
+    volumes:
+      - .:/app
+    ports:
+      - 8000:8000
+    restart: always
     depends_on:
+      - db_postgres
       - redis
+  
+  celery_worker:
+    container_name: celery_worker
+    build: .
+    command: celery -A celery_tasks.tasks.app worker -c 4 --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - app
+      - redis
+    
+  flower:
+    container_name: flower
+    build: .
+    command: celery -A celery_tasks.tasks.app flower --port=5555
+    ports:
+      - 5556:5555
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      - app
+      - redis
+      - celery_worker
 
 volumes:
   db-postgres:
     driver: local
-
-#networks:
-#  my-net:
-#    external: true
