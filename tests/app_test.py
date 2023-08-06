@@ -1,60 +1,117 @@
-import unittest
+import json
+
+import pytest
+from fastapi.encoders import jsonable_encoder
 from fastapi.testclient import TestClient
-from main import app, cache
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from app import app, get_db, StockSchema, stock_tasks, redis_client
+from db.db_configuration import Base
+from schemas.schema import TransactionSchema
 
-TEST_DATABASE_URL = "sqlite:///./test.db"
-
-# Create a test database engine
-test_engine = create_engine(TEST_DATABASE_URL)
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
-
-
-class TestFastAPIApp(unittest.TestCase):
-    def setUp(self):
-        # Create all tables in the test database
-        test_engine.echo = True  # Optional, for debugging purposes
-        Base.metadata.create_all(bind=test_engine)
-        self.client = TestClient(app)
-
-    def tearDown(self):
-        # Clear the cache and remove all data from tables after each test
-        cache.clear()
-        with SessionLocal() as db:
-            db.execute("DELETE FROM users")
-            db.execute("DELETE FROM stocks")
-            db.execute("DELETE FROM transactions")
-
-    def test_user_signup_success(self):
-        user_data = {"username": "test_user", "password": "password123"}
-        response = self.client.post("/users/", json=user_data)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["username"], user_data["username"])
-
-    def test_user_signup_username_conflict(self):
-        user_data = {"username": "existing_user", "password": "password456"}
-        # Manually add an existing user to the test database to simulate a conflict
-        with SessionLocal() as db:
-            db.execute("INSERT INTO users (username, password) VALUES (:username, :password)",
-                       {"username": "existing_user", "password": "password789"})
-        response = self.client.post("/users/", json=user_data)
-        self.assertEqual(response.status_code, 409)
-
-    def test_user_details_success(self):
-        # Manually add a user to the test database to retrieve their details
-        with SessionLocal() as db:
-            db.execute("INSERT INTO users (username, password) VALUES (:username, :password)",
-                       {"username": "user123", "password": "pass123"})
-        response = self.client.get("/users/user123/")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["username"], "user123")
-
-    def test_user_details_not_found(self):
-        response = self.client.get("/users/non_existent_user/")
-        self.assertEqual(response.status_code, 404)
+# Use an in-memory SQLite database for testing
+SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.fixture(scope="module")
+def db():
+    # Set up the database and create the tables
+    Base.metadata.create_all(bind=engine)
+    yield TestingSessionLocal()
+    # Tear down the database after testing
+    Base.metadata.drop_all(bind=engine)
+
+
+def test_create_stock(db):
+    client = TestClient(app)
+
+    # Define test data
+    test_stock_data = {
+        "symbol": "AAPL",
+        "name": "Apple Inc.",
+        "price": 150.00,
+    }
+
+    # Send a POST request to create a stock
+    response = client.post("/stocks/", json=test_stock_data)
+
+    # Assert that the request was successful (HTTP status code 200)
+    assert response.status_code == 200
+
+    # Assert the response data matches the input data
+    assert response.json() == test_stock_data
+
+    # Check if the stock was correctly inserted into the database
+    created_stock = db.query(stock_tasks.Stock).filter_by(symbol="AAPL").first()
+    assert created_stock is not None
+    assert created_stock.symbol == "AAPL"
+    assert created_stock.name == "Apple Inc."
+    assert created_stock.price == 150.00
+
+
+def test_get_stock_empty_db(client):
+    response = client.get("/stocks/")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Stock is Empty"}
+
+
+def test_get_stock_cached_data(client, db, monkeypatch):
+    test_stocks = [StockSchema(name="Stock1", symbol="AAPL", company_name="AAPL", current_price=150),
+                   StockSchema(name="Stock2", company_name="AAPL", current_price=150)]
+    monkeypatch.setattr("app.get_all_stocks", lambda db: test_stocks)
+    monkeypatch.setattr("app.redis_client.get", lambda key: json.dumps(jsonable_encoder(test_stocks)))
+
+    response = client.get("/stocks/")
+    assert response.status_code == 200
+    assert response.json() == [{"name": "Stock1"}, {"name": "Stock2"}]
+
+
+def test_get_stock_ticker_not_found(client):
+    response = client.get("/stocks/invalid_ticker/")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "No stock Found"}
+
+
+def test_get_user_transaction_not_found(client):
+    response = client.get("/transaction/123456/")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "No Transaction Found"}
+
+
+def test_get_user_transaction_cached_data(client, db, monkeypatch):
+    test_transactions = [
+        TransactionSchema(id=1, user_id=123456, amount=100),
+        TransactionSchema(id=2, user_id=123456, amount=200)
+    ]
+    monkeypatch.setattr("app.stock_tasks.get_transaction", lambda db, user_id: None)
+    monkeypatch.setattr("app.redis_client.get", lambda key: json.dumps(jsonable_encoder(test_transactions)))
+
+    response = client.get("/transaction/123456/")
+    assert response.status_code == 200
+    assert response.json() == [
+        {"id": 1, "user_id": 123456, "amount": 100},
+        {"id": 2, "user_id": 123456, "amount": 200}
+    ]
+
+
+def test_get_user_transaction_db_data(client, db, monkeypatch):
+    test_transactions = [
+        TransactionSchema(id=1, user_id=123456, amount=100),
+        TransactionSchema(id=2, user_id=123456, amount=200)
+    ]
+    monkeypatch.setattr("app.stock_tasks.get_transaction", lambda db, user_id: test_transactions)
+    monkeypatch.setattr("app.redis_client.get", lambda key: None)
+
+    response = client.get("/transaction/123456/")
+    assert response.status_code == 200
+    assert response.json() == [
+        {"id": 1, "user_id": 123456, "amount": 100},
+        {"id": 2, "user_id": 123456, "amount": 200}
+    ]
+
+    # Check if the data was cached in redis
+    cached_data = redis_client.get("transaction_123456")
+    assert cached_data is not None
+    assert json.loads(cached_data) == jsonable_encoder(test_transactions)

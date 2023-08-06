@@ -27,7 +27,7 @@ htpp://localhost:8000/docs
 
 To run the pytests go to the main project directory and run the following command.
 ```bash
-python -m unittest tests/app_test.py
+pytest tests/
 ```
 ## Run the Kafka Consumer and Producer
 
