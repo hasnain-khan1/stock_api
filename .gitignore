@@ -1,0 +1,7 @@
+opika/
+kafka_consumers.py
+kafka_producers.py
+tests.py
+tets_db.py
+.idea
+
