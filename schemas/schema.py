@@ -17,8 +17,15 @@ class StockSchema(BaseModel):
 
 class TransactionSchema(BaseModel):
     user_id: int
+    ticker: str
     quantity: int
-    price: float
+    transaction_type: str
+
+
+class UserStockData(BaseModel):
+    user_id: int
+    quantity: float
+    stock_id: int
 
 
 class TransactionTimeStampSchema(BaseModel):
